@@ -30,16 +30,8 @@
     alias: "Copy of first broker login"
     copyFrom: "first broker login"
     authenticationExecutions:
-          - providerId: "test-execution1"
+          - providerId: "allow-access-authenticator"
             requirement: "REQUIRED"
-            authenticationConfig:
-              alias: "test.execution1.property"
-              config:
-                test1.property: "value"
-          - providerId: "test-execution2"
+          - providerId: "no-cookie-redirect"
             requirement: "REQUIRED"
-            authenticationConfig:
-              alias: "test.execution2.property"
-              config:
-                test2.property: "value"
     state: present
