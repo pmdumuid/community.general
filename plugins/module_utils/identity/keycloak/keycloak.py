@@ -385,7 +385,7 @@ class KeycloakAPI(object):
                             data=json.dumps(clientrep), validate_certs=self.validate_certs)
         except Exception as e:
             self.module.fail_json(msg='Could not update client %s in realm %s: %s'
-                                      % (id, realm, str(e)))
+                                      % (id, realm, _get_http_error_info(e)))
 
     def create_client(self, clientrep, realm="master"):
         """ Create a client in keycloak
@@ -1694,3 +1694,18 @@ class KeycloakAPI(object):
         except Exception as e:
             self.module.fail_json(msg='Unable to delete component %s in realm %s: %s'
                                       % (cid, realm, str(e)))
+
+
+def _get_http_error_info(e):
+    """ Get a string representation of the error for use in feedback.
+    :param e: The Exception.
+    """
+    error_info = str(e)
+    # Attempt to extract the JSON error from the body of the response.
+    if isinstance(e, HTTPError):
+        try:
+            json_error_message = json.loads(to_native(e.fp.read()))
+            error_info += " - " + json_error_message['error']
+        except:
+            pass
+    return error_info
