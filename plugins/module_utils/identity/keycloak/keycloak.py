@@ -46,6 +46,12 @@ URL_TOKEN = "{url}/realms/{realm}/protocol/openid-connect/token"
 URL_CLIENT = "{url}/admin/realms/{realm}/clients/{id}"
 URL_CLIENTS = "{url}/admin/realms/{realm}/clients"
 
+URL_USERS = "{url}/admin/realms/{realm}/users"
+URL_USER_RESET_PASSWORD = "{url}/admin/realms/{realm}/users/{id}/reset-password"
+URL_USER_REPRESENTATION = "{url}/admin/realms/{realm}/users/{id}"
+URL_USER_GROUPS = "{url}/admin/realms/{realm}/users/{id}/groups"
+URL_USER_GROUP = "{url}/admin/realms/{realm}/users/{id}/groups/{group_id}"
+
 URL_CLIENT_ROLES = "{url}/admin/realms/{realm}/clients/{id}/roles"
 URL_CLIENT_ROLE = "{url}/admin/realms/{realm}/clients/{id}/roles/{name}"
 URL_CLIENT_ROLE_COMPOSITES = "{url}/admin/realms/{realm}/clients/{id}/roles/{name}/composites"
@@ -558,6 +564,73 @@ class KeycloakAPI(object):
         except Exception as e:
             self.module.fail_json(msg="Could not delete available rolemappings for client %s in group %s, realm %s: %s"
                                       % (cid, gid, realm, str(e)))
+
+    def get_user_by_username(self, username, realm='master'):
+        # See https://www.keycloak.org/docs-api/5.0/rest-api/index.html#_getusers
+        users = self._get_request(
+            URL_USERS.format(url=self.baseurl, realm=realm) + "?username=" + username,
+            resource_description='with with the username, "%s" in the realm "%s"' % (username, realm)
+        )
+        if not users:
+            return None
+        userrep = self._get_request(
+            URL_USER_REPRESENTATION.format(url=self.baseurl, realm=realm, id=users[0]['id']),
+            resource_description='user representation for realm %s' % realm
+        )
+        return userrep
+
+    def create_user(self, userrep, realm="master"):
+        """ Create a user in keycloak
+        :param userrep: Representation of user to be created. Must at least contain field username
+        :param realm: realm for the user to be created in.
+        :return: HTTPResponse object on success
+        """
+        return self._post_request(
+            URL_USERS.format(url=self.baseurl, realm=realm),
+            userrep,
+            "user with username, `%s` in realm `%s`" % (userrep["username"], realm)
+        )
+
+    def reset_user_password(self, user_id, new_password, temporary, realm="master"):
+        self._put_request(
+            URL_USER_RESET_PASSWORD.format(url=self.baseurl, realm=realm, id=user_id),
+            {"type": "password", "temporary": temporary, "value": new_password},
+            'Reset the password for user with id, `%s` in the realm, `%s`' % (user_id, realm)
+        )
+
+    def delete_user(self, user_id, realm="master"):
+        return self._delete_request(
+            URL_USER_REPRESENTATION.format(url=self.baseurl, realm=realm, id=user_id),
+            resource_description='user with id, `%s` in the realm, `%s`' % (user_id, realm)
+        )
+
+    def update_user(self, user_id, userrep, realm="master"):
+        # Note: This doesn't use `PATCH`
+        return self._put_request(
+            URL_USER_REPRESENTATION.format(url=self.baseurl, realm=realm, id=user_id),
+            userrep,
+            "update user with user id, `%s` in realm `%s`" % (user_id, realm)
+        )
+
+    def get_group_memberships_for_user(self, user_id, realm='master'):
+        """
+        Get the groups of a user.
+        :param user_id: The id of the user.
+        :param realm: Realm in which the user resides
+        :returns list of dicts: A list of dicts containing the following fields - 'id', 'name', 'path'
+        """
+        user_groups = self._get_request(
+            URL_USER_GROUPS.format(url=self.baseurl, realm=realm, id=user_id),
+            'groups for the user with id, %s in realm %s' % (user_id, realm)
+        )
+        return user_groups
+
+    def add_group_membership(self, user_id, group_id, realm='master'):
+        self._put_request(
+            URL_USER_GROUP.format(url=self.baseurl, realm=realm, id=user_id, group_id=group_id),
+            {},
+            "user with id, %s to group %s in realm %s" % (user_id, group_id, realm)
+        )
 
     def get_client_templates(self, realm='master'):
         """ Obtains client template representations for client templates in a realm
@@ -1720,3 +1793,64 @@ class KeycloakAPI(object):
         except Exception as e:
             self.module.fail_json(msg='Unable to delete component %s in realm %s: %s'
                                       % (cid, realm, str(e)))
+
+    def _get_request(self, request_url, resource_description, none_for_404=False):
+        """
+        Performs a GET request on the keycloak API, and raises the appropriate failure messages
+        when the endpoint responds with an error.
+        :param request_url: The URL being requested.
+        :param resource_description: A clear description of the resource being obtained to use in the failure message.
+        :param none_for_404: If set to True, then return None instead of raising an exception when a 404 error occurs.
+        """
+        try:
+            return json.loads(to_native(open_url(request_url, method='GET', headers=self.restheaders, validate_certs=self.validate_certs).read()))
+        except ValueError as e:
+            self.module.fail_json(msg='API returned incorrect JSON when trying to obtain %s: %s' % (resource_description, str(e)))
+        except HTTPError as e:
+            if none_for_404 and e.code == 404:
+                return None
+            self.module.fail_json(msg='Could not obtain %s: %s' % (resource_description, str(e)))
+        except Exception as e:
+            self.module.fail_json(msg='Could not obtain %s: %s' % (resource_description, str(e)))
+
+    def _put_request(self, request_url, resource_data, resource_description):
+        """
+        Performs a PUT request on the keycloak API, and raises the appropriate failure messages
+        when the endpoint responds with an error.
+        :param request_url: The URL being requested.
+        :param resource_data: The data to send as JSON in the body of the request.
+        :param resource_description: A clear description of the resource being updated to use in the failure message.
+        """
+        try:
+            return open_url(request_url, method='PUT', headers=self.restheaders, data=json.dumps(resource_data), validate_certs=self.validate_certs)
+        except Exception as e:
+            self.module.fail_json(msg='Could not set data for %s: %s' % (resource_description, str(e)))
+
+    def _post_request(self, request_url, resource_data, resource_description):
+        """
+        Performs a POST request on the keycloak API, and raises the appropriate failure messages
+        when the endpoint responds with an error.
+        :param request_url: The URL being requested.
+        :param resource_data: The data to send as JSON in the body of the request.
+        :param resource_description: A clear description of the resource being updated to use in the failure message.
+        """
+        try:
+            return open_url(request_url, method="POST", headers=self.restheaders, data=json.dumps(resource_data), validate_certs=self.validate_certs)
+        except Exception as e:
+            self.module.fail_json(msg="Could not create %s: %s" % (resource_description, str(e)))
+
+    def _delete_request(self, request_url, resource_description, resource_data=None):
+        """
+        Performs a POST request on the keycloak API, and raises the appropriate failure messages
+        when the endpoint responds with an error.
+        :param request_url: The URL being requested.
+        :param resource_description: A clear description of the resource being updated to use in the failure message.
+        :param resource_data: [Optional] The data to send as JSON in the body of the request.
+        """
+        try:
+            kwargs = {'method': 'DELETE', 'headers': self.restheaders, 'validate_certs': self.validate_certs}
+            if resource_data:
+                kwargs['data'] = json.dumps(resource_data)
+            return open_url(request_url, **kwargs)
+        except Exception as e:
+            self.module.fail_json(msg='Could not delete %s: %s' % (resource_description, str(e)))
